@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# lane-budget [--json] [--since <hours>]
+#
+# Spend picture for the research lanes (every *-think wrapper). No backend
+# exposes a usage API, so this is local bookkeeping: it counts calls in the
+# ledger ($CLAUDE_LANES_DIR/usage.jsonl) inside each lane's rolling window,
+# compares against the soft caps in $CLAUDE_LANES_CONFIG, and reports any active
+# cooldown that a rate-limit response triggered.
+#
+# Run this BEFORE delegating: prefer a GREEN lane; treat YELLOW as "use only if
+# this lane is genuinely the best fit for the task"; treat RED / cooldown as
+# "do not use unless nothing else can do the task at all".
+set -uo pipefail
+
+CFG="${CLAUDE_LANES_CONFIG:-$HOME/.config/claude-lanes/budgets.json}"
+DIR="${CLAUDE_LANES_DIR:-$HOME/.local/share/claude-lanes}"
+LEDGER="$DIR/usage.jsonl"
+COOLDOWNS="$DIR/cooldowns"
+
+JSON=0
+SINCE_OVERRIDE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) JSON=1; shift ;;
+    --since) SINCE_OVERRIDE="$2"; shift 2 ;;
+    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "lane-budget: unknown arg '$1'" >&2; exit 1 ;;
+  esac
+done
+
+exec python3 "$DIR/budget.py" "$CFG" "$LEDGER" "$COOLDOWNS" "$JSON" "$SINCE_OVERRIDE"

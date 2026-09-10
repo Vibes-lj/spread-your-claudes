@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# lane-guard <codex|gemini|cursor|geminiweb>
+#
+# Preflight gate that every *-think wrapper calls before it hits its backend.
+#   exit 0  -> clear to use (a YELLOW lane prints a warning to stderr but passes)
+#   exit 3  -> BLOCKED: RED verdict, active cooldown, or min-spacing violation.
+#              Reason on stderr. Pick another lane, or set LANE_FORCE=1 in the
+#              environment to override (only when this lane is the sole one that
+#              can do the task).
+#   exit 0  -> also the fail-open result if `lane-budget` is missing/broken, so a
+#              tooling problem never wedges delegation entirely.
+set -uo pipefail
+
+LANE="${1:-}"
+case "$LANE" in
+  codex|gemini|cursor|geminiweb) : ;;
+  *) echo "usage: lane-guard <codex|gemini|cursor|geminiweb>" >&2; exit 2 ;;
+esac
+
+if [ -n "${LANE_FORCE:-}" ]; then
+  echo "lane-guard: LANE_FORCE set -- skipping the $LANE budget gate." >&2
+  exit 0
+fi
+
+command -v lane-budget >/dev/null 2>&1 || exit 0
+J="$(lane-budget --json 2>/dev/null)" || exit 0
+[ -n "$J" ] || exit 0
+
+LANE_BUDGET_JSON="$J" python3 - "$LANE" <<'PY'
+import json, os, sys
+lane = sys.argv[1]
+try:
+    d = json.loads(os.environ.get("LANE_BUDGET_JSON", "{}"))
+except Exception:
+    sys.exit(0)
+x = d.get(lane)
+if not x:
+    sys.exit(0)
+v = x.get("verdict", "GREEN")
+r = x.get("reason") or ""
+if v == "RED":
+    sys.stderr.write(
+        f"lane-guard: {lane} is RED ({r}). Refusing this call.\n"
+        f"  -> route to another lane, or re-run with LANE_FORCE=1 if {lane} is "
+        f"the only lane that can do this task.\n")
+    sys.exit(3)
+if v == "YELLOW":
+    sys.stderr.write(f"lane-guard: {lane} is YELLOW ({r}). Proceeding -- use only if it is the best fit.\n")
+sys.exit(0)
+PY

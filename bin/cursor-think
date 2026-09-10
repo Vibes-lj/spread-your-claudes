@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# cursor-think [-C <dir>] [-e low|medium|high] [-m <model>] [-v] "<question>"
+#
+# Fire-and-return offload: hands a research/analysis task to the Cursor Agent
+# CLI in ASK mode (read-only Q&A -- no edits, no shell writes) and prints ONLY
+# its final answer.
+#
+# Cursor's edge among the lanes: built-in codebase retrieval/indexing and a
+# choice of frontier models (GPT-5.x, Claude Sonnet/Opus, Gemini, Grok). Reach
+# for it for "where in this codebase is X", code-aware Q&A, or a second frontier
+# opinion. --mode ask makes the call structurally read-only.
+#
+# Auth: run `cursor-agent login` once (shares the login with the Cursor desktop
+# app). A sandboxed caller that cannot read the login keychain fails with
+# "failed to copy trust settings of system certificate" -- run from an
+# unsandboxed shell, or set CURSOR_API_KEY in ~/.config/secrets/cursor.env to
+# skip the keychain entirely.
+#
+# Effort -> model (dynamic; -m always overrides). Confirm the live IDs with
+# `cursor-agent models` and update the case block below if a name is rejected:
+#   -e low     composer-2.5                   fast/cheap, quick lookups
+#   (default)  auto                           Cursor picks per task
+#   -e medium  claude-sonnet-5-thinking-high  code-aware analysis
+#   -e high    claude-opus-5-thinking-high    hard multi-step reasoning
+#
+# -v shows raw output. On failure the decisive error line goes to stderr.
+set -uo pipefail
+
+DIR="."
+EFFORT=""
+MODEL=""
+VERBOSE=0
+while :; do
+  case "${1:-}" in
+    -C) DIR="$2"; shift 2 ;;
+    -e) EFFORT="$2"; shift 2 ;;
+    -m) MODEL="$2"; shift 2 ;;
+    -v) VERBOSE=1; shift ;;
+    *) break ;;
+  esac
+done
+[ $# -ge 1 ] || { echo 'usage: cursor-think [-C dir] [-e low|medium|high] [-m model] [-v] "<task>"' >&2; exit 1; }
+
+case "$EFFORT" in
+  ""|low|medium|high) : ;;
+  *) echo "cursor-think: -e must be low|medium|high, got '$EFFORT'" >&2; exit 1 ;;
+esac
+
+if [ -z "$MODEL" ]; then
+  case "$EFFORT" in
+    low)    MODEL="composer-2.5" ;;
+    medium) MODEL="claude-sonnet-5-thinking-high" ;;
+    high)   MODEL="claude-opus-5-thinking-high" ;;
+    *)      MODEL="auto" ;;
+  esac
+fi
+
+SECRETS="${CURSOR_THINK_SECRETS:-$HOME/.config/secrets/cursor.env}"
+if [ -f "$SECRETS" ]; then
+  set -a; . "$SECRETS"; set +a
+fi
+[ -z "${CURSOR_API_KEY:-}" ] && unset CURSOR_API_KEY   # don't pass an empty key
+
+LIB="${CLAUDE_LANES_DIR:-$HOME/.local/share/claude-lanes}/lib.sh"
+[ -f "$LIB" ] && . "$LIB"
+T0=$(date +%s)
+
+PREFIX='You are being consulted as a research/analysis tool, not as the primary
+agent on this repo. The primary agent that called you owns all writes, git, and
+live system state. Read whatever you need to answer well. Give exact file:line
+evidence for factual claims. Mark guesses as guesses. Lead with the answer, no
+preamble. End your reply with nothing but the answer -- no sign-off.
+
+Task:
+'"$1"
+
+if command -v lane-guard >/dev/null 2>&1; then
+  lane-guard cursor || exit $?
+fi
+
+RAW="$(cd "$DIR" && cursor-agent --print --mode ask --trust --output-format json \
+  --workspace "$DIR" --model "$MODEL" "$PREFIX" 2>&1)"
+STATUS=$?
+
+# The JSON result object is the last line containing "type":"result" -- trim
+# any reconnect-noise prefix ("Retry attempt 1...") before the opening brace.
+JSON="$(printf '%s\n' "$RAW" | grep -E '"type":"result"' | tail -1 | sed 's/^[^{]*//')"
+
+if type lane_record >/dev/null 2>&1; then
+  printf '%s\n' "$RAW" | lane_scan_ratelimit cursor || true
+  TOKS="$(printf '%s' "$JSON" | python3 -c 'import json,sys
+try:
+    u=json.load(sys.stdin).get("usage",{}) or {}
+    print((u.get("inputTokens") or ""), (u.get("outputTokens") or ""))
+except Exception: print(" ")' 2>/dev/null)"
+  lane_record cursor "$MODEL" "${EFFORT:-default}" "$STATUS" "$(( $(date +%s) - T0 ))" ${TOKS:-}
+fi
+
+emit_fail() {
+  echo "cursor-think: cursor-agent ($MODEL) failed${1:+ ($1)}" >&2
+  printf '%s\n' "$RAW" \
+    | grep -vE '^(ERROR: failed to copy trust settings|Connection lost, reconnecting|Retry attempt)' \
+    | grep -iE 'error|quota|limit|denied|not found|unauthor|forbidden|invalid|exceeded|auth' \
+    | grep -vE '^[[:space:]]+at ' | head -8 >&2
+  [ -n "$JSON" ] && printf '%s\n' "$JSON" >&2
+  exit "${2:-1}"
+}
+
+if [ "$VERBOSE" = 1 ]; then
+  printf '%s\n' "$RAW"
+  exit "$STATUS"
+fi
+
+[ "$STATUS" -ne 0 ] && [ -z "$JSON" ] && emit_fail "exit $STATUS" "$STATUS"
+[ -z "$JSON" ] && emit_fail "no result object"
+
+printf '%s' "$JSON" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+if d.get("is_error") or d.get("subtype")!="success":
+    sys.stderr.write("cursor-think: "+str(d.get("subtype") or d.get("result") or d)+"\n"); sys.exit(1)
+print((d.get("result") or "").strip())
+'

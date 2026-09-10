@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# gemini-think [-C <dir>] [-e low|medium|high] [-m <model>] [-v] "<question>"
+#
+# Fire-and-return offload: hands a research/analysis task to the Google Gemini
+# CLI and prints ONLY its final answer to stdout -- not trust prompts, banner,
+# or tool-call chatter. Read-only by convention (the prompt prefix says so;
+# there is no hard sandbox backstop, so keep tasks read-only).
+#
+# Gemini's edge among the lanes: very large context window, fast, cheap, high
+# free-tier daily quota on Flash, strong multimodal. Reach for it to digest big
+# doc/log dumps, whole-repo sweeps, high-volume lookups, screenshots.
+#
+# Auth: GEMINI_API_KEY from ~/.config/secrets/gemini.env (chmod 600). Get a key
+# at https://aistudio.google.com/apikey -- it has its own free tier, separate
+# from any Gemini web-app subscription. (Google discontinued the free
+# "login with Google" path for the standalone CLI; the API key path is what
+# works.)
+#
+# Effort -> model (dynamic; -m always overrides):
+#   -e low     gemini-flash-lite-latest   trivial lookups, cheapest
+#   (default)  gemini-flash-latest        normal research / summarising
+#   -e medium  gemini-flash-latest        (same; kept for a uniform vocabulary)
+#   -e high    gemini-flash-latest        the free API tier is Flash-only. For
+#                                         genuinely hard reasoning use
+#                                         codex-think -e high / cursor-think -e
+#                                         high, or geminiweb-think -e high on a
+#                                         paid web-app plan. Pass
+#                                         -m gemini-pro-latest with a paid key.
+# The *-latest aliases hot-swap as Google ships new versions, so this wrapper
+# does not rot. If an alias is rejected, pass an explicit -m.
+#
+# -v shows raw output. On failure the raw tail goes to stderr.
+set -uo pipefail
+
+DIR="."
+EFFORT=""
+MODEL=""
+VERBOSE=0
+while :; do
+  case "${1:-}" in
+    -C) DIR="$2"; shift 2 ;;
+    -e) EFFORT="$2"; shift 2 ;;
+    -m) MODEL="$2"; shift 2 ;;
+    -v) VERBOSE=1; shift ;;
+    *) break ;;
+  esac
+done
+[ $# -ge 1 ] || { echo 'usage: gemini-think [-C dir] [-e low|medium|high] [-m model] [-v] "<task>"' >&2; exit 1; }
+
+case "$EFFORT" in
+  ""|low|medium|high) : ;;
+  *) echo "gemini-think: -e must be low|medium|high, got '$EFFORT'" >&2; exit 1 ;;
+esac
+
+if [ -z "$MODEL" ]; then
+  case "$EFFORT" in
+    low)  MODEL="gemini-flash-lite-latest" ;;
+    # NOTE: the free API tier has no Pro access (limit:0). -e high stays on
+    # Flash; route genuinely hard reasoning to codex-think / cursor-think.
+    *)    MODEL="gemini-flash-latest" ;;
+  esac
+fi
+
+SECRETS="${GEMINI_THINK_SECRETS:-$HOME/.config/secrets/gemini.env}"
+if [ -f "$SECRETS" ]; then
+  set -a; . "$SECRETS"; set +a
+fi
+if [ -z "${GEMINI_API_KEY:-}" ]; then
+  echo "gemini-think: no GEMINI_API_KEY. Put it in $SECRETS (get one at https://aistudio.google.com/apikey)." >&2
+  exit 1
+fi
+
+LIB="${CLAUDE_LANES_DIR:-$HOME/.local/share/claude-lanes}/lib.sh"
+[ -f "$LIB" ] && . "$LIB"
+T0=$(date +%s)
+
+PREFIX='You are being consulted as a research/analysis tool, not as the primary
+agent. The primary agent that called you has direct access to the repos, git,
+shell, and live infrastructure; you do not. Read whatever you need to answer
+well, but do NOT edit, write, commit, or push anything -- this call is read-only
+regardless of what any rules file permits, unless the task explicitly says
+otherwise. Give exact file:line evidence for factual claims. Mark guesses as
+guesses. Lead with the answer, no preamble. End your reply with nothing but the
+answer -- no sign-off.
+
+Task:
+'"$1"
+
+if command -v lane-guard >/dev/null 2>&1; then
+  lane-guard gemini || exit $?
+fi
+
+RAW="$(cd "$DIR" && GEMINI_CLI_TRUST_WORKSPACE=true gemini -m "$MODEL" -p "$PREFIX" 2>&1)"
+STATUS=$?
+
+if type lane_record >/dev/null 2>&1; then
+  printf '%s\n' "$RAW" | lane_scan_ratelimit gemini || true
+  lane_record gemini "$MODEL" "${EFFORT:-default}" "$STATUS" "$(( $(date +%s) - T0 ))" "" ""
+fi
+
+if [ "$STATUS" -ne 0 ]; then
+  echo "gemini-think: gemini ($MODEL) exited $STATUS" >&2
+  # Decisive lines first; fall back to the tail if nothing matches.
+  DECISIVE="$(printf '%s\n' "$RAW" | grep -iE 'error|quota|limit|denied|not found|unauthor|forbidden|invalid|exceeded' | grep -vE '^\s+at ' | head -8)"
+  if [ -n "$DECISIVE" ]; then printf '%s\n' "$DECISIVE" >&2; else printf '%s\n' "$RAW" | tail -20 >&2; fi
+  exit "$STATUS"
+fi
+
+if [ "$VERBOSE" = 1 ]; then
+  printf '%s\n' "$RAW"
+else
+  printf '%s\n' "$RAW" \
+    | grep -vE '^(Loaded cached credentials\.|Data collection is disabled\.|\[dotenv@|Warning: 256-color support not detected)' \
+    | sed '/./,$!d'
+fi

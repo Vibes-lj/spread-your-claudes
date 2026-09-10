@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# lane-cool <codex|gemini|cursor|geminiweb> <minutes>   park a lane RED for N minutes
+# lane-cool <codex|gemini|cursor|geminiweb> clear       lift a manual/auto cooldown
+# lane-cool                                             show current cooldowns
+#
+# Manual override for when you KNOW a backend is spent (e.g. a provider's usage
+# is blown for the day) and want the wrappers to stop touching it before the
+# automatic rate-limit detector would trip. Writes the same marker the wrappers
+# use:  $CLAUDE_LANES_DIR/cooldowns/<lane> = epoch seconds until clear.
+set -uo pipefail
+
+DIR="${CLAUDE_LANES_DIR:-$HOME/.local/share/claude-lanes}/cooldowns"
+mkdir -p "$DIR"
+
+now="$(date +%s)"
+
+if [ $# -eq 0 ]; then
+  found=0
+  for f in "$DIR"/*; do
+    [ -e "$f" ] || continue
+    found=1
+    lane="$(basename "$f")"
+    until="$(cat "$f" 2>/dev/null || echo 0)"
+    if [ "$until" -gt "$now" ]; then
+      printf '%-9s cooling ~%dm (until %s)\n' "$lane" "$(( (until - now) / 60 ))" "$(date -r "$until" '+%Y-%m-%d %H:%M')"
+    else
+      printf '%-9s clear (stale marker)\n' "$lane"
+    fi
+  done
+  [ "$found" = 1 ] || echo "no cooldown markers"
+  exit 0
+fi
+
+LANE="$1"
+case "$LANE" in
+  codex|gemini|cursor|geminiweb) : ;;
+  *) echo "lane-cool: lane must be codex|gemini|cursor|geminiweb, got '$LANE'" >&2; exit 1 ;;
+esac
+
+case "${2:-}" in
+  ""|-h|--help)
+    echo "usage: lane-cool <lane> <minutes> | lane-cool <lane> clear | lane-cool" >&2
+    exit 1 ;;
+  clear)
+    rm -f "$DIR/$LANE"
+    echo "lane-cool: $LANE cooldown cleared"
+    exit 0 ;;
+  *[!0-9]*)
+    echo "lane-cool: minutes must be a whole number, got '$2'" >&2
+    exit 1 ;;
+esac
+
+MINS="$2"
+until=$(( now + MINS * 60 ))
+printf '%s\n' "$until" > "$DIR/$LANE"
+echo "lane-cool: $LANE parked RED for ${MINS}m (until $(date -r "$until" '+%Y-%m-%d %H:%M'))"

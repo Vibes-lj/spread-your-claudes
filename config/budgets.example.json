@@ -1,0 +1,53 @@
+{
+  "_comment": "Soft budgets for the research lanes. `lane-budget` reads this; `lane-guard` (called by every *-think wrapper) enforces it -- a RED lane is REFUSED, not just discouraged. Bypass a refusal with LANE_FORCE=1 in the env, only when the lane is the one thing that can do the task. Numbers are conservative guesses, not measured -- tune them to your real plan limits. window_hours = the rolling window a cap applies to. yellow_pct/red_pct = % of soft_cap_calls (measured on the WEIGHTED score) at which the lane flags. min_spacing_secs = hard minimum gap between two calls on that lane. weight_by_effort scales each call by its -e level; the top-level map is the default, a lane may override it.",
+
+  "weight_by_effort": {
+    "low": 1,
+    "default": 1,
+    "medium": 2,
+    "high": 3,
+    "ultra": 5
+  },
+
+  "lanes": {
+    "gemini": {
+      "window_hours": 24,
+      "soft_cap_calls": 200,
+      "yellow_pct": 60,
+      "red_pct": 85,
+      "min_spacing_secs": 0,
+      "note": "AI Studio API key, free tier: per-day + per-minute request limits, no usage API -- this is a local count. Flash RPD is generous. This is the cheap workhorse -- send volume here first."
+    },
+    "cursor": {
+      "window_hours": 720,
+      "soft_cap_calls": 300,
+      "yellow_pct": 60,
+      "red_pct": 85,
+      "min_spacing_secs": 0,
+      "note": "Monthly request quota, plan-dependent. Set soft_cap_calls from your Cursor dashboard usage page (minus a buffer). Good for codebase-retrieval Q&A."
+    },
+    "codex": {
+      "window_hours": 5,
+      "soft_cap_calls": 10,
+      "yellow_pct": 40,
+      "red_pct": 70,
+      "min_spacing_secs": 60,
+      "weight_by_effort": {
+        "low": 1,
+        "default": 2,
+        "medium": 2,
+        "high": 3,
+        "ultra": 5
+      },
+      "note": "ChatGPT-account usage, easy to blow. Weighted cap: a -e high call counts 3x, ultra 5x, default 2x. 60s hard minimum between calls. Route to gemini/cursor unless the task genuinely needs Codex's deliberate reasoning. YELLOW at weighted 4, RED at 7."
+    },
+    "geminiweb": {
+      "window_hours": 5,
+      "soft_cap_calls": 150,
+      "yellow_pct": 60,
+      "red_pct": 85,
+      "min_spacing_secs": 0,
+      "note": "Gemini WEB APP on a paid plan (cookie auth) -- a separate quota pool from `gemini`, which is an API key. The real per-window budget is large (hundreds of Pro messages). soft_cap_calls here is a conservative self-limit, not the real ceiling. Use when `gemini` (API) is drained, or when you want a top-model / Deep Research answer. UNOFFICIAL API -- see docs/COOKIES.md."
+    }
+  }
+}

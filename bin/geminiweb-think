@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# geminiweb-think [-C <dir>] [-e low|medium|high] [-m <model>] [--deep] [-v] "<question>"
+#
+# Fire-and-return offload to the Google Gemini WEB APP (gemini.google.com) on a
+# paid Gemini plan (Google AI Pro / Ultra) -- a different quota pool from
+# `gemini-think`, which uses an AI Studio API key on the free tier. Prints ONLY
+# the final answer to stdout. Read-only by convention (the prompt prefix says
+# so; the web app has no repo/shell access anyway).
+#
+# Why this lane exists: a paid Gemini plan does NOT raise Gemini *API* limits
+# (separate billing), but it does give the web app the top models + Deep
+# Research at high limits. This lane taps that. It talks to the web backend with
+# the account's session cookies (no API key), via the `gemini_webapi` Python
+# package.
+#
+#   *** UNOFFICIAL API -- read docs/COOKIES.md before enabling this lane. ***
+#   It uses a reverse-engineered client and your account cookies. That may be
+#   against Google's Terms of Service. Only you can decide if that's acceptable
+#   for your account. The other three lanes use official, supported CLIs.
+#
+# Edge among the lanes: independent quota (survives when gemini-think's API key
+# is drained); the top "advanced" models via the paid tier; optional Deep
+# Research. Weaknesses: no repo traversal (it's the chat app -- -C is accepted
+# but ignored); cookies rotate; slower than the API; the web app sometimes
+# deflects a prompt it would answer via the API.
+#
+# Auth: $HOME/.config/secrets/gemini-web.env (chmod 600) with
+#   GEMINI_WEB_1PSID=...      (the browser's .google.com "__Secure-1PSID" cookie)
+#   GEMINI_WEB_1PSIDTS=...    (the "__Secure-1PSIDTS" cookie; rotates ~daily --
+#                              this wrapper refreshes it in place after a call)
+# See docs/COOKIES.md for how to extract these from your browser.
+#
+# Effort -> model (dynamic; -m always overrides with a raw model name):
+#   -e low     gemini-flash            quick lookups
+#   (default)  gemini-pro             normal research (NOT "unspecified" -- the
+#                                      web app's auto-pick deflects far more)
+#   -e medium  gemini-pro             compare options, first-draft design
+#   -e high    gemini-pro-advanced    + extended thinking; hard reasoning
+#   --deep     force Deep Research (minutes-long; pins the model to pro)
+#
+# NOTE: if you run agents inside a network sandbox, this lane needs an
+# un-sandboxed call -- gemini.google.com is usually not on an allowlist.
+#
+# -v shows the model used + raw library logs on stderr. On failure the decisive
+# line goes to stderr.
+set -uo pipefail
+
+DIR="."
+EFFORT=""
+MODEL=""
+DEEP=0
+VERBOSE=0
+while :; do
+  case "${1:-}" in
+    -C) DIR="$2"; shift 2 ;;
+    -e) EFFORT="$2"; shift 2 ;;
+    -m) MODEL="$2"; shift 2 ;;
+    --deep) DEEP=1; shift ;;
+    -v) VERBOSE=1; shift ;;
+    *) break ;;
+  esac
+done
+[ $# -ge 1 ] || { echo 'usage: geminiweb-think [-C dir] [-e low|medium|high] [-m model] [--deep] [-v] "<task>"' >&2; exit 1; }
+
+case "$EFFORT" in
+  ""|low|medium|high) : ;;
+  *) echo "geminiweb-think: -e must be low|medium|high, got '$EFFORT'" >&2; exit 1 ;;
+esac
+
+if [ -z "$MODEL" ]; then
+  case "$EFFORT" in
+    low)    MODEL="gemini-flash" ;;
+    medium) MODEL="gemini-pro" ;;
+    high)   MODEL="gemini-pro-advanced" ;;
+    # default -> gemini-pro, not "unspecified": letting the web app auto-pick
+    # lands on a light model that deflects ("having a hard time fulfilling your
+    # request") far more often.
+    *)      MODEL="gemini-pro" ;;
+  esac
+fi
+[ "$DEEP" = 1 ] && MODEL="gemini-pro"
+
+SECRETS="${GEMINIWEB_THINK_SECRETS:-$HOME/.config/secrets/gemini-web.env}"
+if [ -f "$SECRETS" ]; then set -a; . "$SECRETS"; set +a; fi
+if [ -z "${GEMINI_WEB_1PSID:-}" ]; then
+  echo "geminiweb-think: no GEMINI_WEB_1PSID in $SECRETS. Extract the Gemini web cookies from your browser -- see docs/COOKIES.md." >&2
+  exit 1
+fi
+
+LIB="${CLAUDE_LANES_DIR:-$HOME/.local/share/claude-lanes}/lib.sh"
+[ -f "$LIB" ] && . "$LIB"
+T0=$(date +%s)
+
+PREFIX='You are being consulted as a research/analysis tool, not as the primary
+agent. The primary agent that called you has direct access to the repos, git,
+shell, and live infrastructure; you do not. Answer well from your own knowledge
+and reasoning. Do NOT claim to have read files you were not given. Give concrete
+evidence for factual claims and mark guesses as guesses. Lead with the answer,
+no preamble. End with nothing but the answer -- no sign-off.
+
+Task:
+'"$1"
+
+if command -v lane-guard >/dev/null 2>&1; then
+  lane-guard geminiweb || exit $?
+fi
+
+EXTRA_THINK=0
+[ "$EFFORT" = high ] && EXTRA_THINK=1
+
+# The Python driver is written to a temp file rather than an inline heredoc:
+# a quoted heredoc nested inside $(...) trips bash's parser (stray ) / backticks).
+PYF="$(mktemp "${TMPDIR:-/tmp}/geminiweb.XXXXXX.py")"
+ERRF="$(mktemp "${TMPDIR:-/tmp}/geminiweb.XXXXXX.err")"
+trap 'rm -f "$PYF" "$ERRF"' EXIT
+
+cat > "$PYF" <<'PY'
+import os, sys, asyncio, re
+
+prefix  = os.environ["GEMINIWEB_PREFIX"]
+model   = os.environ["GEMINIWEB_MODEL"]
+deep    = os.environ["GEMINIWEB_DEEP"] == "1"
+think   = os.environ["GEMINIWEB_THINK"] == "1"
+verbose = os.environ["GEMINIWEB_VERBOSE"] == "1"
+secrets = os.environ["GEMINIWEB_SECRETS"]
+
+psid   = os.environ.get("GEMINI_WEB_1PSID")
+psidts = os.environ.get("GEMINI_WEB_1PSIDTS") or None
+
+try:
+    from gemini_webapi import GeminiClient, set_log_level
+    from gemini_webapi.constants import Model
+except Exception as e:
+    sys.stderr.write("import gemini_webapi failed (pip install gemini_webapi browser-cookie3): %r\n" % (e,))
+    sys.exit(4)
+
+set_log_level("INFO" if verbose else "ERROR")
+
+# resolve model: match the Model enum by model_name, else pass the raw string
+m = model
+for cand in Model:
+    if cand.model_name == model:
+        m = cand
+        break
+
+FENCE = chr(96) * 3   # keep literal backticks out of this file
+
+async def run():
+    client = GeminiClient(psid, psidts)
+    await client.init(timeout=60, auto_refresh=True)
+    kw = {}
+    if m is not None and model != "unspecified":
+        kw["model"] = m
+    if deep:
+        kw["deep_research"] = True
+    if think:
+        kw["extended_thinking"] = True
+    resp = await client.generate_content(prefix, **kw)
+    text = (resp.text or "").strip()
+    # drop the web app's code-execution scaffolding fences -- noise for a research lane
+    text = re.sub(FENCE + r"[^\n]*\?code_(?:reference|event_index|stdout)[^\n]*\n.*?\n" + FENCE + r"\s*",
+                  "", text, flags=re.S)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    # persist a possibly-rotated 1PSIDTS back to the secrets file
+    try:
+        ck = getattr(client, "cookies", None) or {}
+        new_ts = ck.get("__Secure-1PSIDTS")
+        if new_ts and new_ts != (psidts or ""):
+            src = open(secrets).read()
+            src = re.sub(r"(?m)^GEMINI_WEB_1PSIDTS=.*$", "GEMINI_WEB_1PSIDTS=" + new_ts, src)
+            open(secrets, "w").write(src)
+            if verbose:
+                sys.stderr.write("geminiweb-think: refreshed __Secure-1PSIDTS in secrets file\n")
+    except Exception as e:
+        if verbose:
+            sys.stderr.write("geminiweb-think: 1PSIDTS refresh skipped: %r\n" % (e,))
+    try:
+        await client.close()
+    except Exception:
+        pass
+    if verbose:
+        sys.stderr.write("geminiweb-think: model=%s deep=%s think=%s\n" % (model, deep, think))
+    return text
+
+try:
+    print(asyncio.run(run()))
+except Exception as e:
+    sys.stderr.write("geminiweb-think: %s: %s\n" % (type(e).__name__, e))
+    sys.exit(5)
+PY
+
+OUT="$(GEMINIWEB_PREFIX="$PREFIX" GEMINIWEB_MODEL="$MODEL" GEMINIWEB_DEEP="$DEEP" \
+  GEMINIWEB_THINK="$EXTRA_THINK" GEMINIWEB_VERBOSE="$VERBOSE" GEMINIWEB_SECRETS="$SECRETS" \
+  python3 "$PYF" 2>"$ERRF")"
+STATUS=$?
+RAW_ERR="$(cat "$ERRF" 2>/dev/null)"
+
+if type lane_record >/dev/null 2>&1; then
+  printf '%s\n' "$RAW_ERR" | lane_scan_ratelimit geminiweb || true
+  lane_record geminiweb "$MODEL" "${EFFORT:-default}" "$STATUS" "$(( $(date +%s) - T0 ))" "" ""
+fi
+
+if [ "$VERBOSE" = 1 ] && [ -n "$RAW_ERR" ]; then
+  printf '%s\n' "$RAW_ERR" >&2
+fi
+
+if [ "$STATUS" -ne 0 ]; then
+  echo "geminiweb-think: gemini web lane ($MODEL) failed (exit $STATUS)" >&2
+  printf '%s\n' "$RAW_ERR" | grep -iE 'error|quota|limit|denied|unauthor|forbidden|invalid|exceeded|cookie|auth|1psid|captcha' | head -8 >&2
+  exit "$STATUS"
+fi
+
+printf '%s\n' "$OUT"

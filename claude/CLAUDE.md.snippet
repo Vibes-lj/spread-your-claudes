@@ -1,0 +1,43 @@
+<!--
+  Paste this into ~/.claude/CLAUDE.md (user scope) or a project's CLAUDE.md.
+  It teaches Claude Code to reach for the research lanes instead of reading big
+  context itself. Trim the parts you don't use.
+-->
+
+# Research lanes — offload big reads
+
+Before a large-context read yourself (long doc, unfamiliar repo, multi-file
+"where/why", verifying a claim across a codebase), hand it to a research lane and
+read back only the cited answer. General rule, not project-scoped. Wrappers on
+PATH, uniform interface:
+`<wrapper> [-C dir] [-e low|medium|high] [-m model] [-v] "<question>"`
+
+**Pick provider + model + effort dynamically, by task fit — never one default:**
+
+- `gemini-think` — biggest context, fastest, cheapest, multimodal. For: digest
+  huge docs / log dumps / whole-repo sweeps, high-volume lookups, screenshots.
+- `cursor-think` — built-in codebase retrieval, frontier models, `--mode ask`
+  read-only. For: "where is X in this code", code-aware Q&A, plan a change.
+- `codex-think` — strongest deliberate reasoning, tunable effort, but
+  rate-limited + re-reads repo AGENTS.md each call. For: subtle root-cause,
+  architecture tradeoff, security reasoning. Also `-e ultra`.
+- `geminiweb-think` — Gemini web app on a paid plan (cookie auth), a **separate
+  quota pool** from `gemini-think`'s API key. For: when `gemini-think` is
+  drained, or a top-model / `--deep` Deep Research answer. No repo traversal.
+  (Optional/unofficial — omit this line if you didn't set it up.)
+- Answer really matters → run two lanes on different providers, cross-check
+  (`lane-compare "<q>"`).
+
+`-e` steps effort: `low` = lookup/verify, none/`medium` = normal research,
+`high` = hard multi-step. Each wrapper maps `-e` to a concrete backend model;
+`-m` overrides.
+
+**Before delegating, run `lane-budget`** (local ledger — no backend has a usage
+API). GREEN = use freely; YELLOW = only if this lane is the genuine best fit;
+RED / cooldown = only if nothing else can do the task. Every `*-think` wrapper
+calls `lane-guard` first and **refuses** a RED lane (override: `LANE_FORCE=1
+<wrapper> …`, sparingly). `lane-cool <lane> <minutes>` parks a lane RED manually
+when you know a backend is spent.
+
+Read-only by convention — the primary agent does all writes. On a quota/tier
+error: stop retrying that lane, switch or wait.

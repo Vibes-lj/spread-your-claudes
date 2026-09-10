@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# codex-think [-C <dir>] [-e low|medium|high|ultra] [-m <model>] [-v] "<question>"
+#
+# Fire-and-return offload: hands a research/analysis task to Codex (the
+# ChatGPT-account CLI) and prints ONLY its final answer to stdout -- not the
+# tool-call transcript, banner, or repo dumps it reads along the way. Never
+# commits, never pushes, never edits application code -- read-only by convention
+# (Codex's own AGENTS.md hard-stops still apply as a backstop).
+#
+# Effort is picked per call, not left at one setting -- "ultra" is the most
+# expensive tier and burns through a shared account's usage fast. Default
+# (no -e) inherits config.toml's baseline. Use -e low for trivial factual
+# lookups, -e high / -e ultra only for genuinely hard reasoning (architecture
+# tradeoffs, subtle bug root-causing, multi-step design).
+#
+# Auth: `codex` reads its own credentials (`~/.codex/auth.json`); no secrets
+# file here. It re-reads the repo's AGENTS.md every call, so a repo-less
+# question (no -C) is meaningfully cheaper.
+#
+# -v shows the full raw transcript (debugging only). On failure, always prints
+# the tail of the raw transcript to stderr so the failure is legible --
+# `set -e` + `var="$(cmd)"` would otherwise exit silently on a nonzero codex.
+set -uo pipefail
+
+DIR="."
+EFFORT=""
+MODEL=""
+VERBOSE=0
+while :; do
+  case "${1:-}" in
+    -C) DIR="$2"; shift 2 ;;
+    -e) EFFORT="$2"; shift 2 ;;
+    -m) MODEL="$2"; shift 2 ;;
+    -v) VERBOSE=1; shift ;;
+    *) break ;;
+  esac
+done
+[ $# -ge 1 ] || { echo "usage: codex-think [-C dir] [-e low|medium|high|ultra] [-m model] [-v] \"<task>\"" >&2; exit 1; }
+
+case "$EFFORT" in
+  ""|low|medium|high|ultra) : ;;
+  *) echo "codex-think: -e must be low|medium|high|ultra, got '$EFFORT'" >&2; exit 1 ;;
+esac
+
+EXTRA_ARGS=()
+[ -n "$EFFORT" ] && EXTRA_ARGS+=(-c "model_reasoning_effort=\"$EFFORT\"")
+[ -n "$MODEL" ] && EXTRA_ARGS+=(-m "$MODEL")
+
+LIB="${CLAUDE_LANES_DIR:-$HOME/.local/share/claude-lanes}/lib.sh"
+[ -f "$LIB" ] && . "$LIB"
+T0=$(date +%s)
+
+PREFIX='You are being consulted as a research/analysis tool, not as the primary
+agent on this repo. Read whatever you need to answer well. Do NOT edit, write,
+commit, or push anything -- this call is read-only regardless of what AGENTS.md
+permits, unless the task explicitly says otherwise. Give exact file:line
+evidence for factual claims. Mark guesses as guesses. Lead with the answer, no
+preamble. End your reply with nothing but the answer -- no sign-off.
+
+Task:
+'"$1"
+
+if command -v lane-guard >/dev/null 2>&1; then
+  lane-guard codex || exit $?
+fi
+
+RAW="$(cd "$DIR" && codex exec --skip-git-repo-check ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} "$PREFIX" 2>&1)"
+STATUS=$?
+
+if type lane_record >/dev/null 2>&1; then
+  printf '%s\n' "$RAW" | lane_scan_ratelimit codex || true
+  CTOK="$(printf '%s\n' "$RAW" | grep -oiE 'tokens used[: ]+[0-9]+' | grep -oE '[0-9]+' | tail -1)"
+  lane_record codex "${MODEL:-default}" "${EFFORT:-default}" "$STATUS" "$(( $(date +%s) - T0 ))" "" "${CTOK:-}"
+fi
+
+if [ "$STATUS" -ne 0 ]; then
+  echo "codex-think: codex exec exited $STATUS -- last 60 lines:" >&2
+  printf '%s\n' "$RAW" | tail -60 >&2
+  exit "$STATUS"
+fi
+
+if [ "$VERBOSE" = 1 ]; then
+  printf '%s\n' "$RAW"
+else
+  printf '%s\n' "$RAW" | awk '/^tokens used$/{buf=""; capture=1; next} capture{buf=buf $0 ORS} END{printf "%s", buf}' | tail -n +2
+fi

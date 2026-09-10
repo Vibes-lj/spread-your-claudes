@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# lane-compare  [-C <dir>] [-e low|medium|high] [-m <model>] [--json]
+#               [--lanes codex,gemini,cursor,geminiweb] "<question>"
+#
+# Fan ONE question out to every research lane at once, wait for all of them, and
+# print the answers side by side so they can be compared. Every lane call is
+# read-only -- that is all the *-think wrappers ever do -- and each lane still
+# logs itself to the usage ledger, so `lane-budget` sees these calls like any
+# other.
+#
+# This does NOT synthesise. It lays the answers out with clear delimiters; the
+# calling agent (or you) reads them and writes the agreement / disagreement
+# summary.
+#
+#   -C <dir>     repo as context, passed through to each wrapper (omit = repo-less)
+#   -e <effort>  low|medium|high, passed through (each wrapper maps it to a model)
+#   -m <model>   force one model id on every lane (rarely what you want -- the
+#                lanes have different model namespaces)
+#   --lanes ...  comma list, subset/reorder (e.g. --lanes gemini,cursor to skip a
+#                RED lane per `lane-budget`)
+#   --json       emit a machine object instead of the text report
+#
+# Exit status: 0 if every requested lane returned 0, else the count of failures.
+set -uo pipefail
+
+DIR="."
+EFFORT=""
+MODEL=""
+JSON=0
+LANES="${LANE_COMPARE_LANES:-codex,gemini,cursor,geminiweb}"
+while :; do
+  case "${1:-}" in
+    -C) DIR="${2:?-C needs a dir}"; shift 2 ;;
+    -e) EFFORT="${2:?-e needs a level}"; shift 2 ;;
+    -m) MODEL="${2:?-m needs a model}"; shift 2 ;;
+    --lanes) LANES="${2:?--lanes needs a list}"; shift 2 ;;
+    --json) JSON=1; shift ;;
+    --) shift; break ;;
+    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) echo "lane-compare: unknown flag '$1'" >&2; exit 1 ;;
+    *) break ;;
+  esac
+done
+[ $# -ge 1 ] || { echo 'usage: lane-compare [-C dir] [-e low|medium|high] [-m model] [--json] [--lanes codex,gemini,cursor,geminiweb] "<question>"' >&2; exit 1; }
+
+case "$EFFORT" in
+  ""|low|medium|high) : ;;
+  *) echo "lane-compare: -e must be low|medium|high, got '$EFFORT'" >&2; exit 1 ;;
+esac
+
+Q="$1"
+
+# Shared flags handed to every wrapper. Built so an empty array is safe under
+# `set -u` on bash 3.2 (macOS /bin/bash).
+COMMON=()
+[ "$DIR" != "." ] && COMMON=(${COMMON[@]+"${COMMON[@]}"} -C "$DIR")
+[ -n "$EFFORT" ]  && COMMON=(${COMMON[@]+"${COMMON[@]}"} -e "$EFFORT")
+[ -n "$MODEL" ]   && COMMON=(${COMMON[@]+"${COMMON[@]}"} -m "$MODEL")
+
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/lane-compare.XXXXXX")"
+trap 'rm -rf "$TMP"' EXIT
+
+run_one() {
+  # runs in a background subshell -- vars are naturally isolated
+  lane="$1"
+  wrapper="$1-think"
+  if ! command -v "$wrapper" >/dev/null 2>&1; then
+    printf '127'                       > "$TMP/$lane.st"
+    printf '0'                         > "$TMP/$lane.dur"
+    printf '%s: not found on PATH\n' "$wrapper" > "$TMP/$lane.err"
+    return
+  fi
+  t0=$(date +%s)
+  out="$("$wrapper" ${COMMON[@]+"${COMMON[@]}"} "$Q" 2>"$TMP/$lane.err")"
+  st=$?
+  t1=$(date +%s)
+  printf '%s' "$out"          > "$TMP/$lane.out"
+  printf '%s' "$st"           > "$TMP/$lane.st"
+  printf '%s' "$((t1 - t0))"  > "$TMP/$lane.dur"
+}
+
+# Fan out.
+PIDS=""
+OIFS="$IFS"; IFS=,
+for lane in $LANES; do
+  IFS="$OIFS"
+  case "$lane" in
+    codex|gemini|cursor|geminiweb) : ;;
+    *) echo "lane-compare: unknown lane '$lane' (want codex|gemini|cursor|geminiweb)" >&2; exit 1 ;;
+  esac
+  run_one "$lane" &
+  PIDS="$PIDS $!"
+  IFS=,
+done
+IFS="$OIFS"
+for p in $PIDS; do wait "$p" || true; done
+
+# Ordered lane list as positional params.
+OIFS="$IFS"; IFS=,
+set -- $LANES
+IFS="$OIFS"
+
+if [ "$JSON" = 1 ]; then
+  python3 - "$TMP" "$Q" "$LANES" <<'PY'
+import json, os, sys
+tmp, q, lanes = sys.argv[1], sys.argv[2], sys.argv[3].split(",")
+def rd(l, ext):
+    p = os.path.join(tmp, l + ext)
+    return open(p).read() if os.path.exists(p) else ""
+res = {"question": q, "lanes": {}}
+for l in lanes:
+    st = rd(l, ".st").strip()
+    res["lanes"][l] = {
+        "status": int(st) if st.lstrip("-").isdigit() else None,
+        "seconds": int(rd(l, ".dur") or 0),
+        "answer": rd(l, ".out"),
+        "error": rd(l, ".err").strip(),
+    }
+res["ok"]   = sum(1 for v in res["lanes"].values() if v["status"] == 0)
+res["fail"] = len(res["lanes"]) - res["ok"]
+print(json.dumps(res, indent=2))
+PY
+  fails=0
+  for lane in "$@"; do [ "$(cat "$TMP/$lane.st" 2>/dev/null || echo 1)" = 0 ] || fails=$((fails + 1)); done
+  exit "$fails"
+fi
+
+BAR="════════════════════════════════════════════════════════════════════════"
+uc() { echo "$1" | tr '[:lower:]' '[:upper:]'; }
+
+printf 'QUESTION : %s\n' "$Q"
+[ "$DIR" != "." ] && printf 'CONTEXT  : -C %s\n' "$DIR"
+printf 'LANES    : %s    effort=%s%s\n' "$LANES" "${EFFORT:-default}" "${MODEL:+  model=$MODEL}"
+
+fails=0
+for lane in "$@"; do
+  st="$(cat "$TMP/$lane.st" 2>/dev/null || echo '?')"
+  dur="$(cat "$TMP/$lane.dur" 2>/dev/null || echo '?')"
+  printf '\n%s\n' "$BAR"
+  if [ "$st" = 0 ]; then
+    printf '  %s    OK    %ss\n' "$(uc "$lane")" "$dur"
+  else
+    printf '  %s    FAILED (exit %s)    %ss\n' "$(uc "$lane")" "$st" "$dur"
+    fails=$((fails + 1))
+  fi
+  printf '%s\n' "$BAR"
+  if [ "$st" = 0 ] && [ -s "$TMP/$lane.out" ]; then
+    cat "$TMP/$lane.out"; echo
+  else
+    echo "--- stderr ---"
+    cat "$TMP/$lane.err" 2>/dev/null || true
+    echo
+  fi
+done
+
+printf '\n%s\n' "$BAR"
+n=$#
+printf 'DONE: %s/%s lanes OK. Now synthesise: where they AGREE (high confidence),\n' "$((n - fails))" "$n"
+printf 'where they DIVERGE (flag it, say which is likely right + why), and what\n'
+printf 'each lane raised that the others missed.\n'
+
+exit "$fails"
