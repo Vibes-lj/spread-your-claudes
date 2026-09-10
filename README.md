@@ -65,7 +65,7 @@ All four take the same flags:
 ## Quick start
 
 ```bash
-git clone https://github.com/<you>/spread-your-claudes
+git clone https://github.com/Vibes-lj/spread-your-claudes
 cd spread-your-claudes
 ./install.sh
 ```
