@@ -45,10 +45,16 @@ short, cited answer. Your session grows by five lines instead of six hundred.
    the final answer to stdout. Failures go to stderr with the decisive line
    first. No interactive session, no state.
 
-2. **Read-only by convention.** Every wrapper prepends a prompt telling the lane
-   it is a research tool with no write access — do not edit, commit, or push.
-   `cursor-think` also passes `--mode ask`, which is structurally read-only. The
-   primary agent does 100% of the writes. Lanes are eyes, not hands.
+2. **General delegation, with push held back.** `codex-think`, `gemini-think`,
+   and `cursor-think` can read, edit, run commands, and commit — the calling
+   agent stays the manager and decides what to delegate. Push is where they
+   differ: `codex-think` blocks it at the OS sandbox level (`-s workspace-write`
+   + network access forced off), so `git push` fails outright regardless of
+   what the model tries. `gemini-think`/`cursor-think` expose no per-call
+   network-block flag, so their "never push" is prompt-instruction only — a
+   should, not a guarantee. `geminiweb-think` is the exception: the raw Gemini
+   web chat app has no file/shell/tool access at all, so it stays
+   reasoning-only no matter what the prompt says.
 
 3. **Uniform interface.** Every lane takes the same flags:
    `-C <dir>` (repo context), `-e low|medium|high` (effort → model), `-m <model>`

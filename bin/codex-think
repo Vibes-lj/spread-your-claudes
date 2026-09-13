@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # codex-think [-C <dir>] [-e low|medium|high|ultra] [-m <model>] [-v] "<question>"
 #
-# Fire-and-return offload: hands a research/analysis task to Codex (the
-# ChatGPT-account CLI) and prints ONLY its final answer to stdout -- not the
-# tool-call transcript, banner, or repo dumps it reads along the way. Never
-# commits, never pushes, never edits application code -- read-only by convention
-# (Codex's own AGENTS.md hard-stops still apply as a backstop).
+# General-purpose delegate: hands a task to Codex (the ChatGPT-account CLI) --
+# reading, editing, running commands, and committing inside the target dir as
+# needed -- and prints ONLY its final answer to stdout, not the tool-call
+# transcript, banner, or repo dumps it reads along the way. The primary agent
+# that called you stays the manager: review what it did, decide what's next.
+#
+# Push is blocked at the OS sandbox level here, not just by instruction: this
+# call runs `-s workspace-write` with network access forced off via
+# `-c sandbox_workspace_write.network_access=false`, regardless of your
+# machine's own Codex config. `git push`, or any other network call, fails
+# outright -- it can't succeed even if the model tries.
 #
 # Effort is picked per call, not left at one setting -- "ultra" is the most
 # expensive tier and burns through a shared account's usage fast. Default
@@ -50,12 +56,14 @@ LIB="${CLAUDE_LANES_DIR:-$HOME/.local/share/claude-lanes}/lib.sh"
 [ -f "$LIB" ] && . "$LIB"
 T0=$(date +%s)
 
-PREFIX='You are being consulted as a research/analysis tool, not as the primary
-agent on this repo. Read whatever you need to answer well. Do NOT edit, write,
-commit, or push anything -- this call is read-only regardless of what AGENTS.md
-permits, unless the task explicitly says otherwise. Give exact file:line
-evidence for factual claims. Mark guesses as guesses. Lead with the answer, no
-preamble. End your reply with nothing but the answer -- no sign-off.
+PREFIX='You are being delegated a task by another agent, which remains the
+manager: it decides what to delegate and reviews what comes back. You may
+read, edit, write, run commands, and commit in the target directory as needed
+to complete the task well. Network access is disabled for this call -- do not
+attempt `git push`, curl, or anything else that leaves the machine; it will
+simply fail. Give exact file:line evidence for factual claims. Mark guesses as
+guesses. Lead with the answer, no preamble. End your reply with nothing but
+the answer -- no sign-off.
 
 Task:
 '"$1"
@@ -64,7 +72,9 @@ if command -v lane-guard >/dev/null 2>&1; then
   lane-guard codex || exit $?
 fi
 
-RAW="$(cd "$DIR" && codex exec --skip-git-repo-check ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} "$PREFIX" 2>&1)"
+RAW="$(cd "$DIR" && codex exec --skip-git-repo-check -s workspace-write \
+  -c sandbox_workspace_write.network_access=false \
+  ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} "$PREFIX" 2>&1)"
 STATUS=$?
 
 if type lane_record >/dev/null 2>&1; then

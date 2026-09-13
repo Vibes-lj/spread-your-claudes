@@ -18,7 +18,7 @@ All four share one interface:
 | Task shape | Lane | Why |
 |---|---|---|
 | Digest a huge doc / long log dump / whole-repo sweep; screenshots & PDFs; high-volume cheap lookups | **gemini-think** | biggest context window, fastest, cheapest, highest free daily quota |
-| "Where in this codebase is X", code-aware Q&A, plan a change, want a frontier GPT / Claude opinion | **cursor-think** | built-in codebase retrieval/indexing; routes to frontier models; `--mode ask` is structurally read-only |
+| "Where in this codebase is X", code-aware Q&A, plan a change, want a frontier GPT / Claude opinion, or an actual edit/run/commit task | **cursor-think** | built-in codebase retrieval/indexing; routes to frontier models |
 | Subtle bug root-cause, architecture tradeoff, security reasoning, careful multi-step design on one repo | **codex-think** | strongest deliberate reasoning, tunable effort; but rate-limits fast and re-reads `AGENTS.md` every call |
 | `gemini-think` (API) is drained; want a top-model or Deep Research answer from knowledge + reasoning (no repo traversal) | **geminiweb-think** | Gemini web app on a paid plan — a **separate quota pool** from the API key; unofficial, see [COOKIES.md](COOKIES.md) |
 | The answer really matters | **`lane-compare`** — two+ lanes, different providers | a cheap cross-check catches a confident wrong answer |

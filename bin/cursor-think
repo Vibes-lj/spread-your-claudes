@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # cursor-think [-C <dir>] [-e low|medium|high] [-m <model>] [-v] "<question>"
 #
-# Fire-and-return offload: hands a research/analysis task to the Cursor Agent
-# CLI in ASK mode (read-only Q&A -- no edits, no shell writes) and prints ONLY
-# its final answer.
+# General-purpose delegate: hands a task to the Cursor Agent CLI and prints
+# ONLY its final answer. `--print` already grants full tool access (write,
+# shell) by default -- no `--mode ask` gate anymore -- plus `--force` so it
+# doesn't hang waiting for interactive approval headlessly. Same caveat as
+# gemini-think: no per-call network-block flag exists here, so the PREFIX
+# telling it never to push is instruction-only, not sandboxed.
 #
 # Cursor's edge among the lanes: built-in codebase retrieval/indexing and a
 # choice of frontier models (GPT-5.x, Claude Sonnet/Opus, Gemini, Grok). Reach
-# for it for "where in this codebase is X", code-aware Q&A, or a second frontier
-# opinion. --mode ask makes the call structurally read-only.
+# for it for "where in this codebase is X", code-aware Q&A, a second frontier
+# opinion, or now, an actual edit/run/commit task.
 #
 # Auth: run `cursor-agent login` once (shares the login with the Cursor desktop
 # app). A sandboxed caller that cannot read the login keychain fails with
@@ -65,11 +68,14 @@ LIB="${CLAUDE_LANES_DIR:-$HOME/.local/share/claude-lanes}/lib.sh"
 [ -f "$LIB" ] && . "$LIB"
 T0=$(date +%s)
 
-PREFIX='You are being consulted as a research/analysis tool, not as the primary
-agent on this repo. The primary agent that called you owns all writes, git, and
-live system state. Read whatever you need to answer well. Give exact file:line
-evidence for factual claims. Mark guesses as guesses. Lead with the answer, no
-preamble. End your reply with nothing but the answer -- no sign-off.
+PREFIX='You are being delegated a task by another agent, which remains the
+manager: it decides what to delegate and reviews what comes back. You may
+read, edit, write, run commands, and commit in this workspace as needed to
+complete the task well. Do NOT run `git push` or anything else that
+publishes/deploys/leaves the machine -- report back and let the calling agent
+do that step. Give exact file:line evidence for factual claims. Mark guesses
+as guesses. Lead with the answer, no preamble. End your reply with nothing
+but the answer -- no sign-off.
 
 Task:
 '"$1"
@@ -78,7 +84,7 @@ if command -v lane-guard >/dev/null 2>&1; then
   lane-guard cursor || exit $?
 fi
 
-RAW="$(cd "$DIR" && cursor-agent --print --mode ask --trust --output-format json \
+RAW="$(cd "$DIR" && cursor-agent --print --force --trust --output-format json \
   --workspace "$DIR" --model "$MODEL" "$PREFIX" 2>&1)"
 STATUS=$?
 

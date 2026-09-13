@@ -76,7 +76,7 @@ Your session grows by **5 lines** instead of **600**.
 | Lane | Backend | Best at | Official? |
 |---|---|---|---|
 | **`gemini-think`** | Google Gemini CLI + AI Studio key | huge docs / log dumps / whole-repo sweeps · screenshots · high-volume cheap lookups | ✅ |
-| **`cursor-think`** | Cursor Agent CLI (`--mode ask`) | *"where in this codebase is X"* · code-aware Q&A · frontier second opinion | ✅ |
+| **`cursor-think`** | Cursor Agent CLI | *"where in this codebase is X"* · code-aware Q&A · frontier second opinion · edit/run/commit | ✅ |
 | **`codex-think`** | Codex CLI (ChatGPT account) | subtle root-cause · architecture tradeoffs · security reasoning | ✅ |
 | **`geminiweb-think`** | Gemini **web app** on a paid plan, via cookies | a separate quota pool when the API key is drained · top models · `--deep` Research | ⚠️ unofficial — [read this](docs/COOKIES.md) |
 

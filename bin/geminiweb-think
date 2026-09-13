@@ -4,8 +4,11 @@
 # Fire-and-return offload to the Google Gemini WEB APP (gemini.google.com) on a
 # paid Gemini plan (Google AI Pro / Ultra) -- a different quota pool from
 # `gemini-think`, which uses an AI Studio API key on the free tier. Prints ONLY
-# the final answer to stdout. Read-only by convention (the prompt prefix says
-# so; the web app has no repo/shell access anyway).
+# the final answer to stdout. Unlike the other three lanes (which take general
+# edit/run/commit delegation), this one stays pure chat: the web app has no
+# file/shell/tool access at all, so there's no "read-only by convention" to
+# lift here -- it structurally cannot write, run, or commit anything
+# regardless of what the prompt says. Reasoning/knowledge only.
 #
 # Why this lane exists: a paid Gemini plan does NOT raise Gemini *API* limits
 # (separate billing), but it does give the web app the top models + Deep

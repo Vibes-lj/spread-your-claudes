@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # gemini-think [-C <dir>] [-e low|medium|high] [-m <model>] [-v] "<question>"
 #
-# Fire-and-return offload: hands a research/analysis task to the Google Gemini
-# CLI and prints ONLY its final answer to stdout -- not trust prompts, banner,
-# or tool-call chatter. Read-only by convention (the prompt prefix says so;
-# there is no hard sandbox backstop, so keep tasks read-only).
+# General-purpose delegate: hands a task to the Google Gemini CLI -- reading,
+# editing, and running commands as needed -- and prints ONLY its final answer
+# to stdout, not trust prompts, banner, or tool-call chatter. Runs
+# `--approval-mode yolo` so it doesn't hang waiting for interactive approval
+# headlessly. Push is instruction-only here, not sandboxed: unlike
+# codex-think, this CLI exposes no per-call network-block flag, so the PREFIX
+# telling it not to push is the only backstop -- treat that as a should, not a
+# guarantee.
 #
 # Gemini's edge among the lanes: very large context window, fast, cheap, high
 # free-tier daily quota on Flash, strong multimodal. Reach for it to digest big
@@ -74,14 +78,15 @@ LIB="${CLAUDE_LANES_DIR:-$HOME/.local/share/claude-lanes}/lib.sh"
 [ -f "$LIB" ] && . "$LIB"
 T0=$(date +%s)
 
-PREFIX='You are being consulted as a research/analysis tool, not as the primary
-agent. The primary agent that called you has direct access to the repos, git,
-shell, and live infrastructure; you do not. Read whatever you need to answer
-well, but do NOT edit, write, commit, or push anything -- this call is read-only
-regardless of what any rules file permits, unless the task explicitly says
-otherwise. Give exact file:line evidence for factual claims. Mark guesses as
-guesses. Lead with the answer, no preamble. End your reply with nothing but the
-answer -- no sign-off.
+PREFIX='You are being delegated a task by another agent, which remains the
+manager: it decides what to delegate and reviews what comes back. That agent
+has its own direct access to the repos, git, shell, and live infrastructure --
+this call is a delegate, not a replacement for it. You may read, edit, write,
+and run commands in the target directory as needed to complete the task well.
+Do NOT run `git push` or anything else that publishes/deploys/leaves the
+machine -- report back and let the calling agent do that step. Give exact
+file:line evidence for factual claims. Mark guesses as guesses. Lead with the
+answer, no preamble. End your reply with nothing but the answer -- no sign-off.
 
 Task:
 '"$1"
@@ -90,7 +95,7 @@ if command -v lane-guard >/dev/null 2>&1; then
   lane-guard gemini || exit $?
 fi
 
-RAW="$(cd "$DIR" && GEMINI_CLI_TRUST_WORKSPACE=true gemini -m "$MODEL" -p "$PREFIX" 2>&1)"
+RAW="$(cd "$DIR" && GEMINI_CLI_TRUST_WORKSPACE=true gemini -m "$MODEL" --approval-mode yolo -p "$PREFIX" 2>&1)"
 STATUS=$?
 
 if type lane_record >/dev/null 2>&1; then
