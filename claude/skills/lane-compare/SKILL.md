@@ -25,7 +25,10 @@ lane-compare [-C dir] [-e low|medium|high] [-m model] [--json] [--lanes codex,ge
 - `-e` — effort, passed to every wrapper (each maps it to its own model).
 - `--lanes` — subset / reorder, e.g. `--lanes gemini,cursor` to skip a RED lane.
 - `--json` — machine object instead of the text report.
-- Each lane runs in parallel; each logs itself to the usage ledger; each is read-only.
+- Each lane runs in parallel and logs itself to the usage ledger. Lanes can
+  edit/run/commit in general, but keep the prompt here a **question**, not a
+  shared edit task — four lanes writing to the same repo at once will conflict.
+  For a delegated write, use a single lane directly, not `lane-compare`.
 
 Ask a **sharp, self-contained question** and request `file:line` evidence — the
 lanes don't share your context.

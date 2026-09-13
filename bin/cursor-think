@@ -84,9 +84,24 @@ if command -v lane-guard >/dev/null 2>&1; then
   lane-guard cursor || exit $?
 fi
 
-RAW="$(cd "$DIR" && cursor-agent --print --force --trust --output-format json \
-  --workspace "$DIR" --model "$MODEL" "$PREFIX" 2>&1)"
+run_cursor_agent() {
+  cd "$DIR" && cursor-agent --print --force --trust --output-format json \
+    --workspace "$DIR" --model "$1" "$PREFIX" 2>&1
+}
+
+RAW="$(run_cursor_agent "$MODEL")"
 STATUS=$?
+
+# A model-specific usage cap (e.g. composer-2.5 exhausted on this plan) fails
+# fast with ActionRequiredError -- retry once on "auto" (what Cursor itself
+# tells you to switch to) before giving up.
+if [ "$STATUS" -ne 0 ] && [ "$MODEL" != "auto" ] \
+   && printf '%s\n' "$RAW" | grep -qiE "ActionRequiredError|out of usage|switch to auto"; then
+  echo "cursor-think: $MODEL out of usage, retrying on auto" >&2
+  MODEL="auto"
+  RAW="$(run_cursor_agent "$MODEL")"
+  STATUS=$?
+fi
 
 # The JSON result object is the last line containing "type":"result" -- trim
 # any reconnect-noise prefix ("Retry attempt 1...") before the opening brace.

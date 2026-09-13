@@ -115,6 +115,6 @@ if [ "$VERBOSE" = 1 ]; then
   printf '%s\n' "$RAW"
 else
   printf '%s\n' "$RAW" \
-    | grep -vE '^(Loaded cached credentials\.|Data collection is disabled\.|\[dotenv@|Warning: 256-color support not detected)' \
+    | grep -vE '^(Loaded cached credentials\.|Data collection is disabled\.|\[dotenv@|Warning: 256-color support not detected|YOLO mode is enabled\.)' \
     | sed '/./,$!d'
 fi

@@ -3,7 +3,7 @@
 # 🕸️ spread-your-claudes
 
 ### Stop paying the context tax.
-**Fan your coding agent's big reads out across every AI CLI you already have.**
+**Fan your coding agent's big reads — and whole tasks — out across every AI CLI you already have.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-black.svg)](LICENSE)
 [![shell](https://img.shields.io/badge/bash%20%2B%20python3-stdlib%20only-black)](docs/ARCHITECTURE.md)
@@ -26,12 +26,14 @@ haystack**, not on thinking.
 
 ## The fix
 
-`spread-your-claudes` is a handful of tiny CLI wrappers. Your agent hands the big
-read to a **research lane** — a one-shot call to a *different* AI CLI (Gemini,
-Cursor, Codex, a paid Gemini web plan) — which reads on **its** provider's quota
-and returns a short, cited answer.
+`spread-your-claudes` is a handful of tiny CLI wrappers. Your agent hands off a
+big read, or a whole self-contained subtask — read, edit, run, commit — to a
+**lane**: a one-shot call to a *different* AI CLI (Gemini, Cursor, Codex, a paid
+Gemini web plan) that does the work on **its** provider's quota and returns a
+short, cited answer or result.
 
-Your session grows by **5 lines** instead of **600**.
+Your session grows by **5 lines** instead of **600** — whether the lane just
+answered a question or finished the whole subtask.
 
 ```
   YOU
@@ -42,14 +44,16 @@ Your session grows by **5 lines** instead of **600**.
 │  owns the conversation         │          every turn.
 │  decides · writes · commits    │
 └───────────────┬────────────────┘
-                │  "read this haystack. answer sharp. cite file:line."
+                │  "read this haystack, answer sharp, cite file:line"
+                │   (or: "do this edit/run/commit task end-to-end")
                 ▼
 ┌────────────────────────────────┐        ← this runs on the LANE's quota.
-│  RESEARCH LANE (fire & return) │          it chews 600 lines of repo /
-│  gemini · cursor · codex ·     │          logs / docs here — you don't
-│  gemini-web                    │          pay for a byte of it.
+│  LANE (fire & return)          │          it chews 600 lines of repo /
+│  gemini · cursor · codex ·     │          logs / docs here — or does the
+│  gemini-web                    │          whole task — not a byte on you.
 └───────────────┬────────────────┘
-                │  ~5 lines:  "auth.ts:42 — HMAC-SHA256, constant-time compare"
+                │  ~5 lines: "auth.ts:42 — HMAC-SHA256, constant-time compare"
+                │   (or: "done — committed 3f2a1c9, tests pass")
                 ▼
         back into the primary agent's context  (+5 lines, not +600)
 ```
@@ -58,8 +62,8 @@ Your session grows by **5 lines** instead of **600**.
 |---|---|---|
 | Agent reads a 600-line file | +600 lines, **billed every turn after** | +5 lines, once |
 | Whose quota did the reading | **yours** | the lane's |
-| What comes back | the whole file | the answer + `file:line` |
-| Who writes the code | your agent | your agent (unchanged) |
+| What comes back | the whole file | the answer + `file:line` — or just "done" |
+| Who can write the code | your agent, always | your agent, or the lane itself for a delegated task |
 
 ---
 
@@ -67,7 +71,7 @@ Your session grows by **5 lines** instead of **600**.
 
 1. **Install** — `./install.sh` symlinks 8 wrappers into `~/.local/bin`. No network, no daemon, re-runnable.
 2. **Set up one lane** — any single lane is useful on its own. `gemini-think` (free API tier) is the easiest.
-3. **Let your agent delegate** — drop the CLAUDE.md snippet in and Claude reaches for a lane before a big read, picks one by fit, checks the budget, and reads back only the cited answer.
+3. **Let your agent delegate** — drop the CLAUDE.md snippet in and Claude reaches for a lane before a big read *or* a self-contained subtask, picks one by fit, checks the budget, and reads back only the cited answer or result.
 
 ---
 
@@ -75,9 +79,9 @@ Your session grows by **5 lines** instead of **600**.
 
 | Lane | Backend | Best at | Official? |
 |---|---|---|---|
-| **`gemini-think`** | Google Gemini CLI + AI Studio key | huge docs / log dumps / whole-repo sweeps · screenshots · high-volume cheap lookups | ✅ |
+| **`gemini-think`** | Google Gemini CLI + AI Studio key | huge docs / log dumps / whole-repo sweeps · screenshots · high-volume cheap lookups · edit/run/commit too | ✅ |
 | **`cursor-think`** | Cursor Agent CLI | *"where in this codebase is X"* · code-aware Q&A · frontier second opinion · edit/run/commit | ✅ |
-| **`codex-think`** | Codex CLI (ChatGPT account) | subtle root-cause · architecture tradeoffs · security reasoning | ✅ |
+| **`codex-think`** | Codex CLI (ChatGPT account) | subtle root-cause · architecture tradeoffs · security reasoning · edit/run/commit (push blocked) | ✅ |
 | **`geminiweb-think`** | Gemini **web app** on a paid plan, via cookies | a separate quota pool when the API key is drained · top models · `--deep` Research | ⚠️ unofficial — [read this](docs/COOKIES.md) |
 
 Every lane takes the same flags:
@@ -127,8 +131,8 @@ cat claude/CLAUDE.md.snippet >> ~/.claude/CLAUDE.md
 cp -r claude/skills/delegate-mode claude/skills/lane-compare ~/.claude/skills/
 ```
 
-- **CLAUDE.md snippet** — tells Claude to reach for a lane before a big read, pick by task fit, and run `lane-budget` first.
-- **`delegate-mode` skill** — a persistent mode: the agent routes *all* big reads / analysis to lanes and keeps only deciding + writing.
+- **CLAUDE.md snippet** — tells Claude to reach for a lane before a big read *or* a self-contained subtask, pick by task fit, and run `lane-budget` first.
+- **`delegate-mode` skill** — a persistent mode: the agent routes big reads and self-contained subtasks to lanes, and keeps final decisions, writes, and any push/deploy for itself.
 - **`lane-compare` skill** — fan one question to every lane and synthesise the agreement / disagreement.
 
 > Not on Claude Code? The wrappers are just CLIs — call them from any agent, script, or your shell.
@@ -171,9 +175,9 @@ the others missed.
 <summary><b>Let the agent drive</b></summary>
 
 With the CLAUDE.md snippet installed you just work normally — Claude reaches for a
-lane when a task means reading a lot, picks one by fit, runs the budget gate, and
-reads back only the cited answer. Say **"delegate mode"** to force it for a whole
-session.
+lane when a task means reading a lot *or* is a self-contained subtask it can hand
+off whole, picks one by fit, runs the budget gate, and reads back only the cited
+answer or result. Say **"delegate mode"** to force it for a whole session.
 </details>
 
 ---
@@ -211,6 +215,7 @@ Details: **[docs/BUDGETING.md](docs/BUDGETING.md)**
 - **Stretching a subscription** — when your primary agent's limit is close, push the reading elsewhere.
 - **Second opinion on an architecture call** — `lane-compare -e high` across Codex + Cursor + Gemini.
 - **High-volume lookups** — dozens of small *"does this API exist / what's the signature"* on Gemini's cheap Flash quota.
+- **Offloading a whole subtask** — hand a self-contained fix, small feature, or refactor to a lane (it reads, edits, runs, commits), review the result, keep moving instead of doing it inline.
 
 ---
 
@@ -219,8 +224,21 @@ Details: **[docs/BUDGETING.md](docs/BUDGETING.md)**
 <details>
 <summary><b>Does this replace my coding agent?</b></summary>
 
-No. It's a sidecar. Your agent still drives, decides, and does every write. Lanes
-only read and answer.
+No. It's a sidecar. Your agent still drives, decides, and handles anything that
+needs its own tools, credentials, or a push/deploy. But for a self-contained
+subtask — read, edit, run, commit inside one repo — a lane can now do the whole
+thing, not just answer questions about it.
+</details>
+
+<details>
+<summary><b>Can a lane actually change files, or just answer questions?</b></summary>
+
+Both. `codex-think`, `gemini-think`, and `cursor-think` can read, edit, run
+commands, and commit inside the directory you point them at — not just research.
+`git push` (or anything else that leaves the machine) is blocked outright for
+`codex-think` at the OS sandbox level, and instruction-only (a should, not a
+guarantee) for the other two. `geminiweb-think` is the one exception: it's the
+raw Gemini web chat app with no file/shell access, so it stays reasoning-only.
 </details>
 
 <details>

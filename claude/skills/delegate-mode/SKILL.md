@@ -1,13 +1,14 @@
 ---
 name: delegate-mode
 description: >
-  Persistent operating mode: the agent stops doing its own big reads / searches
-  / analysis and hands ALL of that to the research lanes (codex-think,
-  gemini-think, cursor-think, geminiweb-think), then acts only as the final
-  decision-maker and the hands that write. Invoke to turn it on for the session.
-  The agent picks lane+model+effort, runs the budget gate first, reads back only
-  the cited answer, decides, and does every edit / commit / git / shell action
-  itself (lanes are read-only). Trigger: "delegate mode", "delegate everything",
+  Persistent operating mode: the agent stops doing big reads, searches, and
+  self-contained subtasks itself and hands them to lanes (codex-think,
+  gemini-think, cursor-think, geminiweb-think) — which can read, edit, run
+  commands, and commit, not just research — then the agent reviews what comes
+  back, decides, and handles anything a lane can't (push/deploy, its own
+  tools/credentials/browser). Invoke to turn it on for the session. The agent
+  picks lane+model+effort, runs the budget gate first, and reads back only the
+  cited answer or result. Trigger: "delegate mode", "delegate everything",
   "you delegate I decide", "full delegation", "stop reading files yourself".
   Exit: "stop delegate mode" / "normal mode".
 ---
@@ -15,8 +16,10 @@ description: >
 # Delegate mode
 
 While this mode is active you are a **router and a decision-maker, not a
-reader**. The thinking-heavy, context-heavy work goes to another provider's
-agent; you keep the judgement and own every write.
+reader or a doer**. The thinking-heavy, context-heavy work — and self-contained
+subtasks — go to another provider's agent; you keep the judgement, review what
+comes back, and do anything a lane can't (push, deploy, your own
+tools/credentials/browser).
 
 ## What you delegate (do NOT do these inline)
 
@@ -26,6 +29,9 @@ agent; you keep the judgement and own every write.
 - Comparing options, first-draft design, architecture trade-off reasoning.
 - Verifying a claim against a codebase or a body of docs.
 - Any task where you would otherwise pull hundreds of lines into context.
+- A self-contained subtask — mostly read/edit/run/commit inside one repo —
+  that doesn't need your own browser, MCP connectors, or credentials to
+  finish. Hand it the whole task, not just the reading part.
 
 Hand it to a lane with the shared interface:
 
@@ -54,7 +60,10 @@ back only the answer — never re-pull the haystack the lane just chewed.
 4. **Cross-check when the answer matters:** `lane-compare "<question>"` (see the
    `lane-compare` skill) instead of trusting one lane.
 5. **Decide.** Synthesise the lane answer(s), resolve conflicts, choose the approach.
-6. **Do the work.** Every edit, command, commit, and push is yours. Lanes never write.
+6. **Push, deploy, and anything a lane can't.** `git push`, anything that
+   leaves the machine, and anything needing your own credentials or browser —
+   yours only. A lane can read, edit, run, and commit inside the repo you hand
+   it; publishing stays here.
 
 ## Exit
 

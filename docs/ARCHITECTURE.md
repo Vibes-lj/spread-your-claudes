@@ -10,12 +10,14 @@ until the session ends or gets compacted.
 Long "read a lot, then act" sessions burn through usage limits this way. The
 expensive part isn't the thinking, it's carrying the haystack.
 
-## The fix: read it somewhere you don't pay for
+## The fix: do it somewhere you don't pay for
 
-A **research lane** is a one-shot call to a *different* AI CLI that you already
-have access to (Gemini, Cursor, a ChatGPT/Codex account, a paid Gemini web
-plan). The lane does the big read on **its** provider's quota and returns a
-short, cited answer. Your session grows by five lines instead of six hundred.
+A **lane** is a one-shot call to a *different* AI CLI that you already have
+access to (Gemini, Cursor, a ChatGPT/Codex account, a paid Gemini web plan).
+The lane does the big read — or a whole self-contained edit/run/commit task —
+on **its** provider's quota and returns a short, cited answer or result. Your
+session grows by five lines instead of six hundred, whether the lane just
+answered a question or finished the subtask outright.
 
 ```
                  ┌─────────────────────────────────────────┐
@@ -25,11 +27,12 @@ short, cited answer. Your session grows by five lines instead of six hundred.
                  │  - does every write / commit / command  │
                  └───────────────┬─────────────────────────┘
                                  │  "read this haystack, answer sharply"
+                                 │   (or: "do this task end-to-end")
                  ┌───────────────▼─────────────────────────┐
-                 │  a research lane  (fire-and-return)      │
+                 │  a lane  (fire-and-return)                │
                  │  gemini-think / cursor-think /           │
                  │  codex-think / geminiweb-think           │
-                 │  - reads the repo / doc / logs          │
+                 │  - reads / edits / runs / commits        │
                  │  - burns THAT provider's tokens         │
                  │  - prints ONLY the final answer         │
                  └─────────────────────────────────────────┘
